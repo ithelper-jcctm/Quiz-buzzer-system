@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>專業搶答機系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
+        
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            overflow: hidden;
+            height: 100vh;
+            transition: background-color 0.5s ease;
+        }
+
+        .bg-timeout {
+            background-color: #7f1d1d !important; /* 深紅色背景 */
+        }
+
+        .status-ready { color: #22c55e; text-shadow: 0 0 10px rgba(34, 197, 94, 0.5); }
+        .status-waiting { color: #eab308; text-shadow: 0 0 10px rgba(234, 179, 8, 0.5); }
+        .status-locked { color: #ef4444; text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+
+        .led-display {
+            font-family: 'Courier New', Courier, monospace;
+            background: #000;
+            border: 4px solid #334155;
+            box-shadow: inset 0 0 40px rgba(0,0,0,1);
+        }
+
+        .logo-img {
+            height: 80px;
+            width: auto;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body id="bodyRoot" class="flex flex-col items-center justify-center p-4">
+
+    <!-- 頂部標題與狀態 (包含校徽) -->
+    <div class="text-center mb-8">
+        <div class="flex items-center justify-center gap-6 mb-4">
+            <img src="https://lh3.googleusercontent.com/sitesv/AA5AbUAjeYFPw1A2oRnePNONhmURas6QQn1uK634S1_YO2ZZGYLuKy0Zw2nBdaL0XYPvm1k3dcb3KK0CDaAKl4WSxFdXwOYNUQf3bPmTjaObpXafiThsx5laokHqfsWOlXDWTg8L9bmt7P_vQjF69qjopen6k64LsAVbyhvt0jET3Sd2jIeAS_FhEYsJfMI=w16383" 
+                 alt="School Logo" 
+                 class="logo-img"
+                 onerror="this.style.display='none'">
+            <h1 class="text-6xl font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+                搶答機控制系統
+            </h1>
+        </div>
+        <div id="statusIndicator" class="text-3xl font-bold status-ready tracking-widest uppercase">
+            系統就緒 - 請按 R 開始
+        </div>
+    </div>
+
+    <!-- 主顯示幕 -->
+    <div class="led-display w-full max-w-4xl rounded-3xl p-12 mb-8 text-center relative border-8 border-slate-800">
+        <div id="displayLabel" class="text-gray-500 text-lg absolute top-6 left-10 tracking-[0.3em] uppercase font-bold">Winning Group</div>
+        
+        <!-- 倒數計時顯示 (僅在模式 C 顯示) -->
+        <div id="timerDisplay" class="absolute top-6 right-10 text-3xl font-bold text-yellow-500 hidden">
+            TIME: <span id="secondsLeft">10</span>s
+        </div>
+
+        <div id="mainDisplay" class="text-[15rem] font-black text-white py-8 italic transition-all duration-300 leading-none">
+            --
+        </div>
+        
+        <div id="winnerLabel" class="text-4xl text-red-500 font-bold opacity-0 transition-opacity mt-4">
+            恭喜第 <span id="winnerNum">?</span> 組搶得！
+        </div>
+    </div>
+
+    <!-- 設定區域 (移除按鈕，改為長按 R) -->
+    <div class="flex flex-col items-center gap-4">
+        <!-- 倒數秒數設定 (僅在模式 C 顯示) -->
+        <div id="timerSettings" class="flex items-center gap-3 opacity-0 pointer-events-none transition-opacity">
+            <span class="text-slate-400">模式 [C] 倒數秒數:</span>
+            <input type="number" id="timerInput" value="10" min="1" max="99" 
+                   class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-center text-yellow-500 font-bold outline-none focus:border-yellow-500">
+        </div>
+        <div class="text-slate-500 text-sm mt-4 tracking-widest">
+            短按 [R]：重設/開始 | 長按 [R]：切換 N/C 模式
+        </div>
+    </div>
+
+    <script>
+        const bodyRoot = document.getElementById('bodyRoot');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const mainDisplay = document.getElementById('mainDisplay');
+        const winnerLabel = document.getElementById('winnerLabel');
+        const winnerNumSpan = document.getElementById('winnerNum');
+        const timerDisplay = document.getElementById('timerDisplay');
+        const secondsLeftSpan = document.getElementById('secondsLeft');
+        const timerSettings = document.getElementById('timerSettings');
+        const timerInput = document.getElementById('timerInput');
+
+        let currentState = 'IDLE'; 
+        let currentMode = 'N'; // 'N' 或 'C'
+        let countdownTimer = null;
+        let timeLeft = 10;
+
+        // 長按控制變量
+        let rKeyDownTime = 0;
+        let rKeyTimer = null;
+        const LONG_PRESS_DURATION = 1000; // 1秒
+
+        // 初始化音訊
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playBeep(freq, duration, type = 'square') {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        function switchMode() {
+            if (currentState !== 'IDLE') return;
+            
+            currentMode = (currentMode === 'N' ? 'C' : 'N');
+            
+            if (currentMode === 'N') {
+                timerSettings.classList.add('opacity-0', 'pointer-events-none');
+                timerDisplay.classList.add('hidden');
+                statusIndicator.innerText = "已切換至 一般模式 (N) - 按 R 開始";
+            } else {
+                timerSettings.classList.remove('opacity-0', 'pointer-events-none');
+                timerDisplay.classList.remove('hidden');
+                secondsLeftSpan.innerText = timerInput.value;
+                statusIndicator.innerText = "已切換至 倒數模式 (C) - 按 R 開始";
+            }
+            
+            statusIndicator.className = "text-3xl font-bold status-ready tracking-widest uppercase";
+            // 播放模式切換音
+            playBeep(440, 0.1);
+            setTimeout(() => playBeep(660, 0.1), 100);
+        }
+
+        function startTimer() {
+            if (currentMode !== 'C') return;
+            timeLeft = parseInt(timerInput.value);
+            secondsLeftSpan.innerText = timeLeft;
+            clearInterval(countdownTimer);
+            countdownTimer = setInterval(() => {
+                timeLeft--;
+                secondsLeftSpan.innerText = timeLeft;
+                if (timeLeft <= 3 && timeLeft > 0) playBeep(330, 0.05, 'sine');
+                if (timeLeft <= 0) {
+                    clearInterval(countdownTimer);
+                    handleTimeout();
+                }
+            }, 1000);
+        }
+
+        function handleTimeout() {
+            if (currentState !== 'RUNNING') return;
+            currentState = 'LOCKED';
+            bodyRoot.classList.add('bg-timeout');
+            mainDisplay.innerText = "!!";
+            mainDisplay.classList.add('text-slate-500');
+            statusIndicator.innerText = "時間到 - 請按 R 重設";
+            statusIndicator.className = "text-3xl font-bold status-locked tracking-widest uppercase";
+            playBeep(220, 0.5);
+        }
+
+        function handleBuzzer(id) {
+            if (currentState !== 'RUNNING') return;
+            clearInterval(countdownTimer);
+            const groupId = id === 0 ? 10 : id;
+            currentState = 'LOCKED';
+            mainDisplay.innerText = groupId.toString().padStart(2, '0');
+            mainDisplay.classList.add('text-red-500');
+            mainDisplay.classList.remove('text-slate-500');
+            mainDisplay.style.textShadow = "0 0 50px rgba(239, 68, 68, 0.8)";
+            winnerNumSpan.innerText = groupId;
+            winnerLabel.classList.remove('opacity-0');
+            statusIndicator.innerText = "已鎖定 - 請按 R 重設";
+            statusIndicator.className = "text-3xl font-bold status-locked tracking-widest uppercase";
+            playBeep(880, 0.5);
+        }
+
+        function toggleReset() {
+            if (currentState === 'LOCKED' || currentState === 'RUNNING') {
+                clearInterval(countdownTimer);
+                currentState = 'IDLE';
+                bodyRoot.classList.remove('bg-timeout');
+                mainDisplay.innerText = "--";
+                mainDisplay.classList.remove('text-red-500', 'text-slate-500');
+                mainDisplay.style.textShadow = "none";
+                winnerLabel.classList.add('opacity-0');
+                statusIndicator.innerText = "系統就緒 - 請再按一次 R 開始";
+                statusIndicator.className = "text-3xl font-bold status-ready tracking-widest uppercase";
+                if (currentMode === 'C') secondsLeftSpan.innerText = timerInput.value;
+                playBeep(440, 0.05);
+            } else if (currentState === 'IDLE') {
+                currentState = 'RUNNING';
+                mainDisplay.innerText = "??";
+                statusIndicator.innerText = "正在搶答中...";
+                statusIndicator.className = "text-3xl font-bold status-waiting tracking-widest uppercase";
+                if (currentMode === 'C') startTimer();
+                playBeep(660, 0.15);
+            }
+        }
+
+        window.addEventListener('keydown', (e) => {
+            const key = e.key.toUpperCase();
+            if (key === 'R') {
+                if (e.repeat) return; // 防止系統自動連發按鍵
+                rKeyDownTime = Date.now();
+                // 視覺提示：稍微改變狀態文字
+                return;
+            }
+            if (/[0-9]/.test(key)) handleBuzzer(parseInt(key));
+        });
+
+        window.addEventListener('keyup', (e) => {
+            const key = e.key.toUpperCase();
+            if (key === 'R') {
+                const pressDuration = Date.now() - rKeyDownTime;
+                if (pressDuration >= LONG_PRESS_DURATION) {
+                    // 長按
+                    switchMode();
+                } else {
+                    // 短按
+                    toggleReset();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
